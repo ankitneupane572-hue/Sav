@@ -228,3 +228,9 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
         Thread {
             val sys = "You are Sav, a personal voice assistant on an Android phone. " +
+                override fun onDestroy() {
+        recognizer?.destroy()
+        tts?.shutdown()
+        super.onDestroy()
+    }
+        }
