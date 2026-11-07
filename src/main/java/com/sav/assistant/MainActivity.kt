@@ -228,9 +228,111 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
         Thread {
             val sys = "You are Sav, a personal voice assistant on an Android phone. " +
-                override fun onDestroy() {
+                "Reply ONLY with JSON: {\"action\":\"...\",\"arg\":\"...\",\"text\":\"...\",\"reply\":\"...\"}. " +
+                "action is one of: youtube (arg=search query), maps (arg=place), search (arg=query), " +
+                "call (arg=phone number digits only), whatsapp (arg=phone number with country code, text=message), " +
+                "open_app (arg=app name), none. " +
+                "reply is a short spoken answer in the language the user spoke (Hindi in Devanagari, or English). " +
+                "If the user just asks a question, use action none and answer it in reply. " +
+                "Keep reply under 2 sentences."
+            val body = JSONObject()
+                .put("systemInstruction", JSONObject().put("parts",
+                    JSONArray().put(JSONObject().put("text", sys))))
+                .put("contents", JSONArray().put(JSONObject()
+                    .put("role", "user")
+                    .put("parts", JSONArray().put(JSONObject().put("text", text)))))
+                .put("generationConfig", JSONObject().put("responseMimeType", "application/json"))
+            var out: String? = null
+            var lastErr = "Unknown error"
+            for (m in models) {
+                try {
+                    val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" +
+                        m + ":generateContent"
+                    val c = URL(endpoint).openConnection() as HttpURLConnection
+                    c.requestMethod = "POST"
+                    c.setRequestProperty("Content-Type", "application/json")
+                    c.setRequestProperty("x-goog-api-key", key)
+                    c.doOutput = true
+                    c.connectTimeout = 15000
+                    c.readTimeout = 20000
+                    c.outputStream.use { it.write(body.toString().toByteArray()) }
+                    val code = c.responseCode
+                    val stream = if (code in 200..299) c.inputStream else c.errorStream
+                    val resp = stream.bufferedReader().use { it.readText() }
+                    if (code in 200..299) {
+                        val root = JSONObject(resp)
+                        val cand = root.getJSONArray("candidates").getJSONObject(0)
+                        val part = cand.getJSONObject("content").getJSONArray("parts").getJSONObject(0)
+                        out = part.getString("text")
+                        break
+                    } else {
+                        lastErr = "Error " + code + " (" + m + "): " + resp.take(150)
+                    }
+                } catch (e: Exception) {
+                    lastErr = "Error (" + m + "): " + e.message
+                }
+            }
+            val result = out
+            if (result == null) {
+                val msg = lastErr
+                runOnUiThread { addLine(msg) }
+                return@Thread
+            }
+            try {
+                val j = JSONObject(result)
+                runOnUiThread { act(j) }
+            } catch (e: Exception) {
+                runOnUiThread { addLine("Error: " + e.message) }
+            }
+        }.start()
+    }
+
+    private fun act(j: JSONObject) {
+        val action = j.optString("action", "none")
+        val arg = j.optString("arg", "")
+        val reply = j.optString("reply", "")
+        if (reply.isNotEmpty()) {
+            addLine("Sav: $reply")
+            speak(reply)
+        }
+        try {
+            when (action) {
+                "youtube" -> go("https://www.youtube.com/results?search_query=" + enc(arg))
+                "maps" -> go("geo:0,0?q=" + enc(arg))
+                "search" -> go("https://www.google.com/search?q=" + enc(arg))
+                "call" -> go("tel:" + arg.filter { it.isDigit() || it == '+' })
+                "whatsapp" -> go("https://wa.me/" + arg.filter { it.isDigit() } +
+                    "?text=" + enc(j.optString("text", "")))
+                "open_app" -> openApp(arg)
+            }
+        } catch (e: Exception) {
+            addLine("Could not do that: " + e.message)
+        }
+    }
+
+    private fun go(u: String) {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)))
+    }
+
+    private fun openApp(name: String) {
+        val pm = packageManager
+        val i = Intent(Intent.ACTION_MAIN)
+        i.addCategory(Intent.CATEGORY_LAUNCHER)
+        val match = pm.queryIntentActivities(i, 0)
+            .firstOrNull { it.loadLabel(pm).toString().contains(name, true) }
+        if (match == null) {
+            addLine("App not found: $name")
+            return
+        }
+        val launch = pm.getLaunchIntentForPackage(match.activityInfo.packageName)
+        if (launch != null) startActivity(launch)
+    }
+
+    override fun onDestroy() {
         recognizer?.destroy()
         tts?.shutdown()
         super.onDestroy()
     }
-        }
+}
+
+// END OF FILE
