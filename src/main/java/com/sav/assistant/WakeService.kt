@@ -30,7 +30,7 @@ class WakeService : Service(), RecognitionListener {
     private var waking = false
     private val modelName = "vosk-model-small-en-us-0.15"
     private val wakeRegex = Regex(
-        "\\b(o|oh|ow|oye|hey)\\s*(sav|save|sab|sev|sub|sob)\\b|\\bosav\\b")
+        "\\b(o|oh|ow|oye|hey|hay)\\s*(sav|save|serve|sub|sob|sab|sev|saw|suv|sov|sir|sieve|sabe|saab|shav|shove)\\b|\\bosav\\b")
 
     override fun onBind(intent: Intent?): IBinder? = null
 
