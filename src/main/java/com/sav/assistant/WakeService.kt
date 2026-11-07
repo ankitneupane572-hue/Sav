@@ -15,6 +15,7 @@ import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FilterInputStream
 import java.net.URL
 import java.util.zip.ZipInputStream
 
@@ -34,7 +35,7 @@ class WakeService : Service(), RecognitionListener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        showNotification()
+        startForegroundNow("Starting...")
         if (intent?.action == "STOP") {
             stopListening()
             stopForeground(true)
@@ -45,15 +46,20 @@ class WakeService : Service(), RecognitionListener {
         return START_STICKY
     }
 
-    private fun showNotification() {
+    private fun buildNotification(text: String): Notification {
+        return Notification.Builder(this, "sav")
+            .setContentTitle("Sav")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setOnlyAlertOnce(true)
+            .build()
+    }
+
+    private fun startForegroundNow(text: String) {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel("sav", "Sav", NotificationManager.IMPORTANCE_LOW))
-        val n = Notification.Builder(this, "sav")
-            .setContentTitle("Sav is listening")
-            .setContentText("Say: O Sav")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .build()
+        val n = buildNotification(text)
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         } else {
@@ -61,9 +67,15 @@ class WakeService : Service(), RecognitionListener {
         }
     }
 
+    private fun setStatus(text: String) {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.notify(1, buildNotification(text))
+    }
+
     private fun fail(msg: String) {
         getSharedPreferences("sav", MODE_PRIVATE).edit()
             .putString("wake_error", msg).apply()
+        setStatus("Error: " + msg.take(80))
     }
 
     private fun startListening() {
@@ -73,15 +85,19 @@ class WakeService : Service(), RecognitionListener {
         Thread {
             try {
                 val dir = File(filesDir, modelName)
-                if (!File(dir, "am").exists()) download(dir)
+                if (!File(dir, "am").exists()) {
+                    setStatus("Downloading model...")
+                    download(dir)
+                }
+                setStatus("Loading model...")
                 if (model == null) model = Model(dir.absolutePath)
                 val rec = Recognizer(model, 16000f)
                 val s = SpeechService(rec, 16000f)
                 s.startListening(this)
                 speech = s
+                setStatus("Ready. Say: Hey Sav")
             } catch (e: Exception) {
                 fail(e.toString())
-                stopSelf()
             }
             starting = false
         }.start()
@@ -91,10 +107,26 @@ class WakeService : Service(), RecognitionListener {
         val tmp = File(filesDir, "tmp_model")
         tmp.deleteRecursively()
         tmp.mkdirs()
-        val conn = URL("https://alphacephei.com/vosk/models/$modelName.zip").openConnection()
+        val conn = URL("https://alphacephei.com/vosk/models/" + modelName + ".zip")
+            .openConnection()
         conn.connectTimeout = 20000
         conn.readTimeout = 60000
-        ZipInputStream(conn.getInputStream().buffered()).use { zip ->
+        var total = 0L
+        var lastShown = 0L
+        val counting = object : FilterInputStream(conn.getInputStream()) {
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                val n = super.read(b, off, len)
+                if (n > 0) {
+                    total += n
+                    if (total - lastShown > 2000000) {
+                        lastShown = total
+                        setStatus("Downloading model: " + (total / 1000000) + " MB")
+                    }
+                }
+                return n
+            }
+        }
+        ZipInputStream(counting.buffered()).use { zip ->
             var e = zip.nextEntry
             while (e != null) {
                 val f = File(tmp, e.name)
@@ -110,30 +142,48 @@ class WakeService : Service(), RecognitionListener {
                 e = zip.nextEntry
             }
         }
+        setStatus("Unpacking model...")
         finalDir.deleteRecursively()
         File(tmp, modelName).renameTo(finalDir)
         tmp.deleteRecursively()
     }
 
-    private fun check(json: String?) {
-        if (json == null || waking) return
-        val text = try {
+    private fun heardText(json: String?): String {
+        if (json == null) return ""
+        return try {
             val j = JSONObject(json)
             j.optString("partial", j.optString("text", ""))
         } catch (e: Exception) {
             ""
         }
+    }
+
+    private fun check(text: String) {
+        if (waking) return
         if (wakeRegex.containsMatchIn(text.lowercase())) onWake()
     }
 
-    override fun onPartialResult(hypothesis: String?) { check(hypothesis) }
-    override fun onResult(hypothesis: String?) { check(hypothesis) }
+    override fun onPartialResult(hypothesis: String?) {
+        check(heardText(hypothesis))
+    }
+
+    override fun onResult(hypothesis: String?) {
+        val t = heardText(hypothesis)
+        if (t.isNotEmpty() && !waking) setStatus("Heard: " + t.takeLast(60))
+        check(t)
+    }
+
     override fun onFinalResult(hypothesis: String?) {}
-    override fun onError(exception: Exception?) { fail(exception.toString()) }
+
+    override fun onError(exception: Exception?) {
+        fail(exception.toString())
+    }
+
     override fun onTimeout() {}
 
     private fun onWake() {
         waking = true
+        setStatus("Wake word heard!")
         stopListening()
         val i = Intent(this, MainActivity::class.java)
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -155,3 +205,5 @@ class WakeService : Service(), RecognitionListener {
         super.onDestroy()
     }
 }
+
+// END OF FILE
