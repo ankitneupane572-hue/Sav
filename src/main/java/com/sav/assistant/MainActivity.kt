@@ -28,7 +28,7 @@ import java.util.Locale
 
 class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
-    private val models = listOf("gemini-2.5-flash-lite", "gemini-2.5-flash")
+    private val models = listOf("gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.6-flash")
     private lateinit var logView: TextView
     private lateinit var scroll: ScrollView
     private lateinit var keyBox: EditText
